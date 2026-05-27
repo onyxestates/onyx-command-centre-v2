@@ -7,12 +7,12 @@ import { connectStorageEmulator, getStorage } from "firebase/storage";
 import { publicFirebaseEnv } from "@/lib/env";
 
 const firebaseConfig = {
-  apiKey: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: publicFirebaseEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: "AIzaSyAX-PoebwQGHYIhD6L1r2H44snQ5Oo6sJI",
+  authDomain: "onyx-command-centre-stag-8cffa.firebaseapp.com",
+  projectId: "onyx-command-centre-stag-8cffa",
+  storageBucket: "onyx-command-centre-stag-8cffa.firebasestorage.app",
+  messagingSenderId: "542361207125",
+  appId: "1:542361207125:web:b7346c0cda235e3b79afdc",
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
