@@ -1,0 +1,120 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(workspaceId) {
+      return /databases/(default)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid);
+    }
+
+    function memberExists(workspaceId) {
+      return signedIn() && firestore.exists(memberPath(workspaceId));
+    }
+
+    function memberData(workspaceId) {
+      return firestore.get(memberPath(workspaceId)).data;
+    }
+
+    function isActiveMember(workspaceId) {
+      return memberExists(workspaceId) && memberData(workspaceId).status == 'active';
+    }
+
+    function isAdmin(workspaceId) {
+      return isActiveMember(workspaceId) && memberData(workspaceId).role == 'admin';
+    }
+
+    function isStaff(workspaceId) {
+      return isActiveMember(workspaceId) && memberData(workspaceId).role == 'staff';
+    }
+
+    function isCleaner(workspaceId) {
+      return isActiveMember(workspaceId) && memberData(workspaceId).role == 'cleaner';
+    }
+
+    function isContractor(workspaceId) {
+      return isActiveMember(workspaceId) && memberData(workspaceId).role == 'contractor';
+    }
+
+    function hasPermission(workspaceId, key) {
+      return isAdmin(workspaceId)
+        || (isActiveMember(workspaceId)
+          && memberData(workspaceId).permissions != null
+          && memberData(workspaceId).permissions[key] == true);
+    }
+
+    function hasAssignedListing(workspaceId, listingId) {
+      return isActiveMember(workspaceId)
+        && memberData(workspaceId).assignedListingIds != null
+        && listingId in memberData(workspaceId).assignedListingIds;
+    }
+
+    function cleaningJobPath(workspaceId, jobId) {
+      return /databases/(default)/documents/workspaces/$(workspaceId)/cleaningJobs/$(jobId);
+    }
+
+    function maintenanceIssuePath(workspaceId, issueId) {
+      return /databases/(default)/documents/workspaces/$(workspaceId)/maintenanceIssues/$(issueId);
+    }
+
+    function isAllowedImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isAllowedMaintenanceFile() {
+      return request.resource.contentType.matches('image/.*') || request.resource.contentType == 'application/pdf';
+    }
+
+    function isBelowLimit(maxMegabytes) {
+      return request.resource.size < maxMegabytes * 1024 * 1024;
+    }
+
+    function cleanerCanUploadCleaning(workspaceId, listingId, jobId) {
+      return isCleaner(workspaceId)
+        && firestore.exists(cleaningJobPath(workspaceId, jobId))
+        && firestore.get(cleaningJobPath(workspaceId, jobId)).data.assignedCleanerUid == request.auth.uid
+        && hasAssignedListing(workspaceId, listingId);
+    }
+
+    function contractorCanUploadMaintenance(workspaceId, issueId) {
+      return isContractor(workspaceId)
+        && firestore.exists(maintenanceIssuePath(workspaceId, issueId))
+        && (
+          firestore.get(maintenanceIssuePath(workspaceId, issueId)).data.assigneeUid == request.auth.uid
+          || (
+            memberData(workspaceId).vendorId != null
+            && firestore.get(maintenanceIssuePath(workspaceId, issueId)).data.vendorId == memberData(workspaceId).vendorId
+          )
+        );
+    }
+
+    match /workspaces/{workspaceId}/maintenance/{issueId}/{fileName} {
+      allow read: if isActiveMember(workspaceId);
+      allow write: if isBelowLimit(10)
+        && isAllowedMaintenanceFile()
+        && (hasPermission(workspaceId, 'canUploadMaintenanceEvidence') || hasPermission(workspaceId, 'canManageMaintenance') || contractorCanUploadMaintenance(workspaceId, issueId));
+      allow delete: if isAdmin(workspaceId) || hasPermission(workspaceId, 'canManageMaintenance');
+    }
+
+    match /workspaces/{workspaceId}/cleanings/{listingId}/{jobId}/{fileName} {
+      allow read: if isActiveMember(workspaceId) && (isAdmin(workspaceId) || isStaff(workspaceId) || hasAssignedListing(workspaceId, listingId));
+      allow write: if isBelowLimit(10)
+        && isAllowedImage()
+        && (isAdmin(workspaceId) || isStaff(workspaceId) || cleanerCanUploadCleaning(workspaceId, listingId, jobId));
+      allow delete: if isAdmin(workspaceId) || isStaff(workspaceId);
+    }
+
+    match /workspaces/{workspaceId}/listings/{listingId}/{fileName} {
+      allow read: if isActiveMember(workspaceId) && (isAdmin(workspaceId) || isStaff(workspaceId) || hasAssignedListing(workspaceId, listingId));
+      allow write: if isBelowLimit(15)
+        && isAllowedImage()
+        && (isAdmin(workspaceId) || isStaff(workspaceId));
+      allow delete: if isAdmin(workspaceId) || isStaff(workspaceId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

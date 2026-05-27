@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  --background: #060606;
+  --surface: #101010;
+  --surface-elevated: #181818;
+  --border: rgba(255,255,255,0.08);
+  --foreground: #faf7f1;
+  --muted: #a1a1aa;
+  --gold: #c9a45c;
+  --gold-soft: rgba(201,164,92,0.14);
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  background:
+    radial-gradient(circle at top, rgba(201,164,92,0.12), transparent 30%),
+    linear-gradient(180deg, #090909 0%, #050505 100%);
+  color: var(--foreground);
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 999px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.onyx-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.32);
+}
+
+.onyx-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+}

@@ -1,0 +1,328 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(workspaceId) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid);
+    }
+
+    function memberExists(workspaceId) {
+      return signedIn() && exists(memberPath(workspaceId));
+    }
+
+    function memberData(workspaceId) {
+      return get(memberPath(workspaceId)).data;
+    }
+
+    function isActiveMember(workspaceId) {
+      return memberExists(workspaceId) && memberData(workspaceId).status == 'active';
+    }
+
+    function role(workspaceId) {
+      return isActiveMember(workspaceId) ? memberData(workspaceId).role : null;
+    }
+
+    function isAdmin(workspaceId) {
+      return role(workspaceId) == 'admin';
+    }
+
+    function isStaff(workspaceId) {
+      return role(workspaceId) == 'staff';
+    }
+
+    function isCleaner(workspaceId) {
+      return role(workspaceId) == 'cleaner';
+    }
+
+    function isContractor(workspaceId) {
+      return role(workspaceId) == 'contractor';
+    }
+
+    function isOperator(workspaceId) {
+      return isAdmin(workspaceId) || isStaff(workspaceId);
+    }
+
+    function hasPermission(workspaceId, key) {
+      return isAdmin(workspaceId)
+        || (isActiveMember(workspaceId)
+          && memberData(workspaceId).permissions != null
+          && memberData(workspaceId).permissions[key] == true);
+    }
+
+    function hasAssignedListing(workspaceId, listingId) {
+      return isActiveMember(workspaceId)
+        && memberData(workspaceId).assignedListingIds != null
+        && listingId in memberData(workspaceId).assignedListingIds;
+    }
+
+    function hasAssignedIssue(workspaceId, issueId) {
+      return isActiveMember(workspaceId)
+        && memberData(workspaceId).assignedIssueIds != null
+        && issueId in memberData(workspaceId).assignedIssueIds;
+    }
+
+    function canAccessListing(workspaceId, listingId) {
+      return isOperator(workspaceId)
+        || hasPermission(workspaceId, 'canManageListings')
+        || hasAssignedListing(workspaceId, listingId);
+    }
+
+    function canAccessIssue(workspaceId, issueId) {
+      return isOperator(workspaceId)
+        || hasPermission(workspaceId, 'canManageMaintenance')
+        || hasAssignedIssue(workspaceId, issueId);
+    }
+
+    function sameWorkspace(workspaceId, data) {
+      return data.workspaceId == workspaceId;
+    }
+
+    function immutableFieldsUnchanged(workspaceId, immutableKeys) {
+      return sameWorkspace(workspaceId, request.resource.data)
+        && request.resource.data.diff(resource.data).unchangedKeys().hasAll(immutableKeys);
+    }
+
+    function validCleaningStatus(status) {
+      return status in ['pending', 'assigned', 'in_progress', 'review', 'completed', 'overdue'];
+    }
+
+    function validMaintenanceStatus(status) {
+      return status in ['open', 'triaged', 'scheduled', 'in_progress', 'resolved', 'closed'];
+    }
+
+    function validReservationStatus(status) {
+      return status in ['confirmed', 'ready_for_check_in', 'checked_in', 'checked_out', 'cancelled', 'blocked'];
+    }
+
+    function validGuestThreadStatus(status) {
+      return status in ['open', 'pending', 'resolved'];
+    }
+
+    function validGuestMessageKind(kind) {
+      return kind in ['team_message', 'internal_note'];
+    }
+
+    function cleanerOwnJob(workspaceId) {
+      return isCleaner(workspaceId) && resource.data.assignedCleanerUid == request.auth.uid;
+    }
+
+    function contractorOwnIssue(workspaceId) {
+      return isContractor(workspaceId)
+        && (
+          resource.data.assigneeUid == request.auth.uid
+          || canAccessIssue(workspaceId, resource.id)
+          || (memberData(workspaceId).vendorId != null && resource.data.vendorId == memberData(workspaceId).vendorId)
+        );
+    }
+
+    function cleanerStatusTransitionAllowed() {
+      return request.resource.data.status == resource.data.status
+        || (resource.data.status in ['pending', 'assigned', 'overdue'] && request.resource.data.status == 'in_progress')
+        || (resource.data.status == 'in_progress' && request.resource.data.status == 'review');
+    }
+
+    function contractorStatusTransitionAllowed() {
+      return request.resource.data.status == resource.data.status
+        || (resource.data.status == 'scheduled' && request.resource.data.status == 'in_progress')
+        || (resource.data.status == 'in_progress' && request.resource.data.status == 'resolved');
+    }
+
+    function cleanerAllowedCleaningUpdate(workspaceId) {
+      return cleanerOwnJob(workspaceId)
+        && request.resource.data.updatedByUid == request.auth.uid
+        && validCleaningStatus(request.resource.data.status)
+        && cleanerStatusTransitionAllowed()
+        && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId', 'reservationId', 'assignedCleanerUid'])
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'checklist',
+          'completion',
+          'damageReport',
+          'suppliesNeeded',
+          'updatedAt',
+          'updatedByUid'
+        ]);
+    }
+
+    function contractorAllowedIssueUpdate(workspaceId) {
+      return contractorOwnIssue(workspaceId)
+        && request.resource.data.updatedByUid == request.auth.uid
+        && validMaintenanceStatus(request.resource.data.status)
+        && contractorStatusTransitionAllowed()
+        && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId', 'reservationId', 'source'])
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'evidence',
+          'attachments',
+          'cost',
+          'resolution',
+          'updatedAt',
+          'updatedByUid'
+        ]);
+    }
+
+    function guestThreadOperatorUpdateAllowed(workspaceId) {
+      return hasPermission(workspaceId, 'canManageGuests')
+        && validGuestThreadStatus(request.resource.data.status)
+        && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId', 'reservationId'])
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'tags',
+          'lastMessageAt',
+          'lastMessagePreview',
+          'lastMessageKind',
+          'unreadCounts',
+          'escalation',
+          'updatedAt',
+          'updatedByUid'
+        ]);
+    }
+
+    function validGuestMessageCreate(workspaceId, threadId) {
+      return hasPermission(workspaceId, 'canManageGuests')
+        && request.resource.data.workspaceId == workspaceId
+        && request.resource.data.threadId == threadId
+        && validGuestMessageKind(request.resource.data.kind)
+        && request.resource.data.sender.uid == request.auth.uid
+        && request.resource.data.sender.source == 'team'
+        && request.resource.data.visibleToGuest == (request.resource.data.kind == 'team_message');
+    }
+
+    function notificationReadReceiptOnly() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['readAt'])
+        && request.resource.data.readAt != null;
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /workspaces/{workspaceId} {
+      allow read: if isActiveMember(workspaceId);
+      allow create: if signedIn();
+      allow update, delete: if isAdmin(workspaceId);
+
+      match /members/{memberId} {
+        allow read: if isActiveMember(workspaceId);
+        allow create: if hasPermission(workspaceId, 'canManageTeam')
+          && request.resource.data.uid == memberId
+          && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if hasPermission(workspaceId, 'canManageTeam')
+          && immutableFieldsUnchanged(workspaceId, ['uid', 'workspaceId']);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /teamInvites/{inviteId} {
+        allow read, create, update, delete: if hasPermission(workspaceId, 'canManageTeam');
+      }
+
+      match /listings/{listingId} {
+        allow read: if canAccessListing(workspaceId, listingId);
+        allow create: if hasPermission(workspaceId, 'canManageListings') && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if hasPermission(workspaceId, 'canManageListings')
+          && immutableFieldsUnchanged(workspaceId, ['workspaceId']);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /reservations/{reservationId} {
+        allow read: if hasPermission(workspaceId, 'canManageReservations')
+          || hasPermission(workspaceId, 'canManageGuests')
+          || hasPermission(workspaceId, 'canManageCleanings')
+          || canAccessListing(workspaceId, resource.data.listingId);
+        allow create: if (hasPermission(workspaceId, 'canManageReservations') || hasPermission(workspaceId, 'canManageGuests'))
+          && sameWorkspace(workspaceId, request.resource.data)
+          && validReservationStatus(request.resource.data.status);
+        allow update: if (hasPermission(workspaceId, 'canManageReservations') || hasPermission(workspaceId, 'canManageGuests'))
+          && validReservationStatus(request.resource.data.status)
+          && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId']);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /guestThreads/{threadId} {
+        allow read: if hasPermission(workspaceId, 'canManageGuests');
+        allow create: if hasPermission(workspaceId, 'canManageGuests')
+          && sameWorkspace(workspaceId, request.resource.data)
+          && validGuestThreadStatus(request.resource.data.status);
+        allow update: if guestThreadOperatorUpdateAllowed(workspaceId);
+        allow delete: if isAdmin(workspaceId);
+
+        match /messages/{messageId} {
+          allow read: if hasPermission(workspaceId, 'canManageGuests');
+          allow create: if validGuestMessageCreate(workspaceId, threadId);
+          allow update: if false;
+          allow delete: if isAdmin(workspaceId);
+        }
+      }
+
+      match /cleaningJobs/{jobId} {
+        allow read: if hasPermission(workspaceId, 'canManageCleanings')
+          || cleanerOwnJob(workspaceId)
+          || canAccessListing(workspaceId, resource.data.listingId);
+        allow create: if isOperator(workspaceId) && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if (isOperator(workspaceId)
+            && request.resource.data.updatedByUid == request.auth.uid
+            && validCleaningStatus(request.resource.data.status)
+            && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId', 'reservationId']))
+          || cleanerAllowedCleaningUpdate(workspaceId);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /maintenanceIssues/{issueId} {
+        allow read: if hasPermission(workspaceId, 'canManageMaintenance')
+          || hasPermission(workspaceId, 'canManageCleanings')
+          || contractorOwnIssue(workspaceId)
+          || canAccessListing(workspaceId, resource.data.listingId);
+        allow create: if isOperator(workspaceId)
+          && sameWorkspace(workspaceId, request.resource.data)
+          && validMaintenanceStatus(request.resource.data.status);
+        allow update: if (isOperator(workspaceId)
+            && request.resource.data.updatedByUid == request.auth.uid
+            && validMaintenanceStatus(request.resource.data.status)
+            && immutableFieldsUnchanged(workspaceId, ['workspaceId', 'listingId', 'reservationId', 'source']))
+          || contractorAllowedIssueUpdate(workspaceId);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /vendors/{vendorId} {
+        allow read: if hasPermission(workspaceId, 'canManageMaintenance')
+          || (isContractor(workspaceId) && memberData(workspaceId).vendorId == vendorId);
+        allow create: if hasPermission(workspaceId, 'canManageMaintenance') && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if hasPermission(workspaceId, 'canManageMaintenance')
+          && immutableFieldsUnchanged(workspaceId, ['workspaceId']);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /inventoryItems/{itemId} {
+        allow read: if hasPermission(workspaceId, 'canManageInventory')
+          || hasPermission(workspaceId, 'canManageCleanings')
+          || canAccessListing(workspaceId, resource.data.listingId);
+        allow create: if (hasPermission(workspaceId, 'canManageInventory') || hasPermission(workspaceId, 'canManageCleanings'))
+          && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if (hasPermission(workspaceId, 'canManageInventory') || hasPermission(workspaceId, 'canManageCleanings'))
+          && immutableFieldsUnchanged(workspaceId, ['workspaceId']);
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isActiveMember(workspaceId)
+          && (resource.data.scope == 'workspace' || resource.data.recipientUid == request.auth.uid);
+        allow create: if isOperator(workspaceId) && sameWorkspace(workspaceId, request.resource.data);
+        allow update: if (isOperator(workspaceId) && sameWorkspace(workspaceId, request.resource.data))
+          || (isActiveMember(workspaceId) && resource.data.recipientUid == request.auth.uid && notificationReadReceiptOnly());
+        allow delete: if isAdmin(workspaceId);
+      }
+
+      match /activityLogs/{logId} {
+        allow read: if isActiveMember(workspaceId);
+        allow create: if isActiveMember(workspaceId)
+          && sameWorkspace(workspaceId, request.resource.data)
+          && request.resource.data.actorUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
